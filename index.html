@@ -137,7 +137,7 @@ footer .wrap{display:flex;justify-content:space-between;gap:14px;flex-wrap:wrap}
 .ai-h button{background:none;border:0;color:var(--dim);font-size:22px;cursor:pointer;line-height:1;padding:4px 8px;border-radius:6px}
 .ai-h button:hover{color:var(--text);background:var(--bg)}
 #msgs{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:10px;scroll-behavior:smooth}
-.m{max-width:88%;padding:10px 13px;border-radius:12px;font-size:13.5px;line-height:1.55;animation:pop .4s var(--ease) both}
+.m{max-width:88%;white-space:pre-wrap;padding:10px 13px;border-radius:12px;font-size:13.5px;line-height:1.55;animation:pop .4s var(--ease) both}
 .m.bot{background:var(--bg);border:1px solid var(--line);border-bottom-left-radius:3px}
 .m.me{align-self:flex-end;background:var(--g);color:#06100a;border-bottom-right-radius:3px}
 .m a{color:var(--g);text-decoration:underline;text-underline-offset:3px}
@@ -145,6 +145,11 @@ footer .wrap{display:flex;justify-content:space-between;gap:14px;flex-wrap:wrap}
 .m .jump{display:inline-block;margin:8px 6px 0 0;padding:4px 12px;border:1px solid var(--gd);border-radius:99px;color:var(--g);font-size:12.5px;text-decoration:none;cursor:pointer;background:none;font-family:inherit;transition:background .25s,color .25s}
 .m .jump:hover{background:var(--g);color:#06100a}
 @keyframes pop{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+#nudge{position:fixed;right:22px;bottom:78px;z-index:80;max-width:230px;padding:10px 14px;background:var(--raise);border:1px solid var(--gd);border-radius:12px 12px 2px 12px;font-size:13px;cursor:pointer;opacity:0;visibility:hidden;transform:translate3d(0,10px,0);transition:opacity .45s var(--ease),transform .45s var(--ease),visibility .45s}
+#nudge.show{opacity:1;visibility:visible;transform:none}
+.fu{display:flex;gap:6px;flex-wrap:wrap;animation:pop .4s var(--ease) both}
+.fu button{font:12.5px var(--mono);color:var(--g);background:none;border:1px solid var(--gd);border-radius:99px;padding:5px 12px;cursor:pointer;transition:background .25s,color .25s}
+.fu button:hover{background:var(--g);color:#06100a}
 .typing span{display:inline-block;width:5px;height:5px;margin-right:4px;border-radius:50%;background:var(--dim);animation:dot 1s infinite}
 .typing span:nth-child(2){animation-delay:.15s}
 .typing span:nth-child(3){animation-delay:.3s}
@@ -313,15 +318,17 @@ footer .wrap{display:flex;justify-content:space-between;gap:14px;flex-wrap:wrap}
 
 <button id="ai-btn" aria-label="Open the site assistant"><span>Ask the assistant</span></button>
 
+<div id="nudge" role="button" tabindex="0">Not sure where to start? Ask me.</div>
+
 <aside id="ai" aria-label="Site assistant">
   <div class="ai-h">
-    <div><b>Site assistant</b><small>Ask where to go or what to do</small></div>
-    <button id="ai-x" aria-label="Close assistant">&times;</button>
+    <div><b>Site assistant</b><small>Ask anything. Press / to open me from anywhere.</small></div>
+    <div><button id="ai-new" aria-label="Start a new chat" title="New chat">&#8635;</button><button id="ai-x" aria-label="Close assistant">&times;</button></div>
   </div>
   <div id="msgs" aria-live="polite"></div>
   <div class="quick" id="quick"></div>
   <form id="ai-form" autocomplete="off">
-    <input id="ai-in" type="text" maxlength="300" placeholder="Ask a question" aria-label="Your question">
+    <input id="ai-in" type="text" maxlength="300" placeholder="Ask anything" aria-label="Your question">
     <button type="submit">Send</button>
   </form>
 </aside>
@@ -415,10 +422,22 @@ const kb=[
 const fallback={a:"I'm not sure about that one. Try the help page, or ask me about games, applications, the team or the story.",l:[['Open help','./help/']]};
 const chips=['What should I play?','How do I apply?','I need help','Who is on the team?'];
 
-function say(text,who,links){
-  const m=document.createElement('div');
-  m.className='m '+who;
-  m.textContent=text;
+const AI_ENDPOINT='';
+const KEY='wbd-chat';
+const TAG=/\[\[[^\]]*\]\]/g;
+const tips={story:'Reading the story? Ask me how the studio got started.',team:'Checking out the team? I can tell you who does what.',games:'Looking at the games? I can help you pick one.',careers:'Thinking about joining? I can walk you through applying.'};
+let hist=[];
+let log=[];
+let busy=false;
+let section='top';
+
+function save(){
+  try{sessionStorage.setItem(KEY,JSON.stringify({hist:hist.slice(-12),log:log.slice(-30)}))}catch(e){}
+}
+function down(){
+  msgs.scrollTop=msgs.scrollHeight;
+}
+function fillLinks(m,links){
   (links||[]).forEach(([label,href])=>{
     const a=document.createElement('a');
     a.className='jump';
@@ -428,74 +447,104 @@ function say(text,who,links){
     else if(href.startsWith('#'))a.addEventListener('click',()=>{if(innerWidth<640)closeAi()});
     m.appendChild(a);
   });
+}
+function say(text,who,links,keep){
+  const m=document.createElement('div');
+  m.className='m '+who;
+  m.textContent=text;
+  fillLinks(m,links);
   msgs.appendChild(m);
-  msgs.scrollTop=msgs.scrollHeight;
+  down();
+  if(keep!==false)log.push({w:who,t:text,l:links||[]});
   return m;
 }
-const AI_ENDPOINT='';
-const bad=['fuck','shit','bitch','bastard','asshole','dick','cock','pussy','cunt','porn','nude','nudes','sex','sexy','nsfw','horny','rape','molest','whore','slut','kill you','kys','nazi','retard'];
-const badRe=new RegExp('\\b(?:'+bad.join('|')+')(?:s|ed|ing|er|ers)?\\b');
-const leet={'0':'o','1':'i','3':'e','4':'a','5':'s','7':'t','@':'a','$':'s','!':'i'};
-const careRe=/(kill myself|suicide|self.?harm|hurt myself|end my life|want to die)/;
-const blockMsg="I can only help with questions about this site, and I keep it clean. Try asking about our games, applications or the team.";
-const careMsg="That sounds heavy. I'm only a site assistant, so please talk to someone you trust or a local crisis line. I'm happy to help with the site whenever you're ready.";
-function normalize(q){
-  return q.toLowerCase().replace(/[013457@$!]/g,c=>leet[c]).replace(/[^a-z\s]/g,'').replace(/(.)\1{2,}/g,'$1$1').replace(/\s+/g,' ');
+async function typeOut(el,text){
+  el.classList.remove('typing');
+  for(let i=0;i<text.length;i+=2){
+    el.textContent=text.slice(0,i+2);
+    down();
+    await wait(14);
+  }
+  el.textContent=text;
 }
-function verdict(q){
-  const n=normalize(q);
-  if(careRe.test(n))return 'care';
-  if(badRe.test(n)||badRe.test(n.replace(/\b(\w) (?=\w\b)/g,'$1')))return 'block';
-  return 'ok';
-}
-const hist=[];
-let lastAsk=0;
-async function ai(){
+const view=t=>t.split('\u0001')[0].replace(TAG,'').replace(/\[\[[^\]]*$/,'').replace(/\[$/,'');
+async function ai(el){
   if(!AI_ENDPOINT)return null;
   const ctl=new AbortController();
-  const to=setTimeout(()=>ctl.abort(),15000);
+  const to=setTimeout(()=>ctl.abort(),25000);
   try{
-    const r=await fetch(AI_ENDPOINT,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({messages:hist.slice(-8)}),signal:ctl.signal});
+    const r=await fetch(AI_ENDPOINT,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({messages:hist.slice(-8),context:section}),signal:ctl.signal});
     if(!r.ok)return null;
-    const d=await r.json();
-    return typeof d.reply==='string'&&d.reply?d.reply:null;
+    if((r.headers.get('content-type')||'').includes('json')){
+      const d=await r.json();
+      if(!d.reply)return null;
+      await typeOut(el,d.reply);
+      return d;
+    }
+    const rd=r.body.getReader();
+    const dec=new TextDecoder();
+    let acc='';
+    for(;;){
+      const {done,value}=await rd.read();
+      if(done)break;
+      acc+=dec.decode(value,{stream:true});
+      const shown=view(acc);
+      if(shown){el.classList.remove('typing');el.textContent=shown;down()}
+    }
+    const [text,trail]=acc.split('\u0001');
+    let d={reply:text.replace(TAG,'').trim(),links:[],follow:[]};
+    if(trail){try{d=JSON.parse(trail)}catch(e){}}
+    return d.reply?d:null;
   }catch(e){
     return null;
   }finally{
     clearTimeout(to);
   }
 }
+function followUp(list){
+  if(!Array.isArray(list)||!list.length)return;
+  const box=document.createElement('div');
+  box.className='fu';
+  list.slice(0,3).forEach(q=>{
+    const b=document.createElement('button');
+    b.type='button';
+    b.textContent=String(q).slice(0,40);
+    b.addEventListener('click',()=>{box.remove();ask(q)});
+    box.appendChild(b);
+  });
+  msgs.appendChild(box);
+  down();
+}
 async function ask(q){
   q=q.trim().slice(0,300);
-  if(!q)return;
-  if(Date.now()-lastAsk<1200)return;
-  lastAsk=Date.now();
-  say(q,'me');
+  if(!q||busy)return;
+  busy=true;
+  msgs.querySelectorAll('.fu').forEach(x=>x.remove());
   quick.style.display='none';
-  const t=document.createElement('div');
-  t.className='m bot typing';
-  t.innerHTML='<span></span><span></span><span></span>';
-  msgs.appendChild(t);
-  msgs.scrollTop=msgs.scrollHeight;
-  const v=verdict(q);
-  if(v!=='ok'){
-    await wait(500);
-    t.remove();
-    say(v==='care'?careMsg:blockMsg,'bot');
-    return;
-  }
+  say(q,'me');
   hist.push({role:'user',content:q});
+  const el=say('','bot',[],false);
+  el.classList.add('typing');
+  el.innerHTML='<span></span><span></span><span></span>';
   const local=kb.find(e=>e.k.test(q.toLowerCase()));
-  const [reply]=await Promise.all([ai(),wait(500)]);
-  t.remove();
-  if(reply){
-    hist.push({role:'assistant',content:reply});
-    say(reply,'bot',local&&local.l);
+  const [d]=await Promise.all([ai(el),wait(450)]);
+  if(d){
+    el.classList.remove('typing');
+    el.textContent=d.reply;
+    const links=Array.isArray(d.links)&&d.links.length?d.links:(local&&local.l)||[];
+    fillLinks(el,links);
+    hist.push({role:'assistant',content:d.reply});
+    log.push({w:'bot',t:d.reply,l:links});
+    followUp(d.follow);
   }else{
     const hit=local||fallback;
+    await typeOut(el,hit.a);
+    fillLinks(el,hit.l);
     hist.push({role:'assistant',content:hit.a});
-    say(hit.a,'bot',hit.l);
+    log.push({w:'bot',t:hit.a,l:hit.l||[]});
   }
+  busy=false;
+  save();
 }
 chips.forEach(c=>{
   const b=document.createElement('button');
@@ -505,22 +554,66 @@ chips.forEach(c=>{
   quick.appendChild(b);
 });
 let greeted=false;
+function greet(){
+  greeted=true;
+  say("Hi, I'm the site assistant. "+(tips[section]||'Not sure where to start? Ask me about the games, joining the team, or getting help.'),'bot');
+  quick.style.display='';
+}
 function openAi(){
   panel.classList.add('open');
   openBtn.classList.add('hide');
-  if(!greeted){
-    greeted=true;
-    say("Hi, I'm the site assistant. Not sure where to start? Ask me about the games, joining the team, or getting help.",'bot');
-  }
+  nudge.classList.remove('show');
+  try{sessionStorage.setItem('wbd-nudge','1')}catch(e){}
+  if(!greeted)greet();
   setTimeout(()=>input.focus(),300);
 }
 function closeAi(){
   panel.classList.remove('open');
   openBtn.classList.remove('hide');
 }
+function reset(){
+  msgs.innerHTML='';
+  hist=[];
+  log=[];
+  busy=false;
+  try{sessionStorage.removeItem(KEY)}catch(e){}
+  greet();
+  input.focus();
+}
+(function restore(){
+  try{
+    const d=JSON.parse(sessionStorage.getItem(KEY)||'null');
+    if(!d||!d.log||!d.log.length)return;
+    d.log.forEach(x=>say(x.t,x.w,x.l,false));
+    hist=d.hist||[];
+    log=d.log;
+    greeted=true;
+    quick.style.display='none';
+  }catch(e){}
+})();
+const nudge=$('#nudge');
+let seen=false;
+try{seen=!!sessionStorage.getItem('wbd-nudge')}catch(e){}
+if(!seen){
+  setTimeout(()=>{
+    if(!panel.classList.contains('open')){
+      nudge.classList.add('show');
+      try{sessionStorage.setItem('wbd-nudge','1')}catch(e){}
+    }
+  },16000);
+}
+nudge.addEventListener('click',openAi);
+const so=new IntersectionObserver(es=>{
+  es.forEach(e=>{if(e.isIntersecting)section=e.target.id||'top'});
+},{rootMargin:'-45% 0px -50% 0px'});
+document.querySelectorAll('.hero,main section[id]').forEach(el=>so.observe(el));
 openBtn.addEventListener('click',openAi);
 $('#ai-x').addEventListener('click',closeAi);
-document.addEventListener('keydown',e=>{if(e.key==='Escape')closeAi()});
+$('#ai-new').addEventListener('click',reset);
+document.addEventListener('keydown',e=>{
+  if(e.key==='Escape')closeAi();
+  if(e.key==='/'&&!/INPUT|TEXTAREA/.test(document.activeElement.tagName)){e.preventDefault();openAi()}
+});
 $('#ai-form').addEventListener('submit',e=>{
   e.preventDefault();
   const v=input.value;
